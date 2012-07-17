@@ -1,0 +1,65 @@
+###################################################################################################
+# NPC SERVER HELPER CONTROL OPTION
+#
+#  Функция позволяет Включать/Выключать нпс предназначенного
+#  для определенных функций:
+#  Телепортер.Ренеймер.Профер.Баффер.Обмен валюты.Морфы.
+#
+#    Server.Helper.Enable
+#      Description: Enable/Disable Helper Npc.
+#      Включение/Выключение Нпс.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Enable = 1
+
+#    Server.Helper.Teleport.Menu.Enable
+#      Description: Enable/Disable Teleport Menu.
+#      Позволяет Включать/Выключать меню телепортации.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Teleport.Menu.Enable = 1
+
+#    Server.Helper.Buff.Menu.Enable
+#      Description: Enable/Disable Buff Menu.
+#      Позволяет Включать/Выключать меню бафов.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Buff.Menu.Enable = 1
+
+#    Server.Helper.Customize.Menu.Enable
+#      Description: Enable/Disable Customize Menu.
+#      Позволяет Включать/Выключать меню смены имени,расы,класса за очки арены.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Customize.Menu.Enable = 1
+
+#    Server.Helper.Exchange.Menu.Enable
+#      Description: Enable/Disable Exchange Menu.
+#      Позволяет Включать/Выключать меню обмена валюты.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Exchange.Menu.Enable = 1
+
+#    Server.Helper.Movie.Menu.Enable
+#      Description: Enable/Disable Movie Menu.
+#      Позволяет Включать/Выключать меню просмотра видео.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Movie.Menu.Enable = 1
+
+#    Server.Helper.Funny.Menu.Enable
+#      Description: Enable/Disable Funny Menu.
+#      Позволяет Включать/Выключать меню морфа игроков.
+#      Default:  1 - (Enabled)
+#                0 - (Disabled)
+
+Server.Helper.Funny.Menu.Enable = 1
+
+#
+###################################################################################################

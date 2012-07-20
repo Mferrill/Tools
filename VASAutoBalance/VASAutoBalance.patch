@@ -1,0 +1,1433 @@
+diff --git a/src/server/game/Entities/Creature/Creature.cpp b/src/server/game/Entities/Creature/Creature.cpp
+index 4d54d15..ce6f178 100755
+--- a/src/server/game/Entities/Creature/Creature.cpp
++++ b/src/server/game/Entities/Creature/Creature.cpp
+@@ -1180,6 +1180,7 @@ void Creature::SelectLevel(const CreatureTemplate* cinfo)
+ 
+     SetModifierValue(UNIT_MOD_ATTACK_POWER, BASE_VALUE, cinfo->attackpower * damagemod);
+ 
++    sScriptMgr->Creature_SelectLevel(cinfo, this);
+ }
+ 
+ float Creature::_GetHealthMod(int32 Rank)
+diff --git a/src/server/game/Entities/Unit/Unit.cpp b/src/server/game/Entities/Unit/Unit.cpp
+index 73d28fe..899d46c 100755
+--- a/src/server/game/Entities/Unit/Unit.cpp
++++ b/src/server/game/Entities/Unit/Unit.cpp
+@@ -1032,6 +1032,9 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
+         damage = 0;
+ 
+     damageInfo->damage = damage;
++
++    //Hook For CalculateSpellDamageTaken
++    sScriptMgr->CalculateSpellDamageTaken(damageInfo, damage, spellInfo, attackType, crit);
+ }
+ 
+ void Unit::DealSpellDamage(SpellNonMeleeDamage* damageInfo, bool durabilityLoss)
+@@ -1263,6 +1266,9 @@ void Unit::CalculateMeleeDamage(Unit* victim, uint32 damage, CalcDamageInfo* dam
+     }
+     else // Impossible get negative result but....
+         damageInfo->damage = 0;
++
++    //Hook For CalculateMeleeDamage
++    sScriptMgr->CalculateMeleeDamage(victim, damage, damageInfo, attackType);
+ }
+ 
+ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
+diff --git a/src/server/game/Scripting/ScriptLoader.cpp b/src/server/game/Scripting/ScriptLoader.cpp
+index 58b9c55..84da4a7 100755
+--- a/src/server/game/Scripting/ScriptLoader.cpp
++++ b/src/server/game/Scripting/ScriptLoader.cpp
+@@ -17,6 +17,9 @@
+ 
+ #include "ScriptLoader.h"
+ 
++//VAS.AutoBalance
++void AddSC_VAS_AutoBalance();
++
+ //examples
+ void AddSC_example_creature();
+ void AddSC_example_escort();
+@@ -1245,6 +1248,7 @@ void AddCustomScripts()
+ {
+ #ifdef SCRIPTS
+     /* This is where custom scripts should be added. */
++    AddSC_VAS_AutoBalance();
+ 
+ #endif
+ }
+diff --git a/src/server/game/Scripting/ScriptMgr.cpp b/src/server/game/Scripting/ScriptMgr.cpp
+index 23d18e1..4a1001a 100755
+--- a/src/server/game/Scripting/ScriptMgr.cpp
++++ b/src/server/game/Scripting/ScriptMgr.cpp
+@@ -16,6 +16,7 @@
+  * with this program. If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
++#include "Vehicle.h"
+ #include "ScriptPCH.h"
+ #include "ScriptMgr.h"
+ #include "Config.h"
+@@ -26,7 +27,37 @@
+ #include "ScriptLoader.h"
+ #include "ScriptSystem.h"
+ #include "Transport.h"
+-#include "Vehicle.h"
++//#include "Creature.h"
++
++// Utility macros to refer to the script registry.
++#define SCR_REG_MAP(T) ScriptRegistry<T>::ScriptMap
++#define SCR_REG_ITR(T) ScriptRegistry<T>::ScriptMapIterator
++#define SCR_REG_LST(T) ScriptRegistry<T>::ScriptPointerList
++
++// Utility macros for looping over scripts.
++#define FOR_SCRIPTS(T, C, E) \
++    if (SCR_REG_LST(T).empty()) \
++        return; \
++    for (SCR_REG_ITR(T) C = SCR_REG_LST(T).begin(); \
++        C != SCR_REG_LST(T).end(); ++C)
++#define FOR_SCRIPTS_RET(T, C, E, R) \
++    if (SCR_REG_LST(T).empty()) \
++        return R; \
++    for (SCR_REG_ITR(T) C = SCR_REG_LST(T).begin(); \
++        C != SCR_REG_LST(T).end(); ++C)
++#define FOREACH_SCRIPT(T) \
++    FOR_SCRIPTS(T, itr, end) \
++    itr->second
++
++// Utility macros for finding specific scripts.
++#define GET_SCRIPT(T, I, V) \
++    T* V = ScriptRegistry<T>::GetScriptById(I); \
++    if (!V) \
++        return;
++#define GET_SCRIPT_RET(T, I, V, R) \
++    T* V = ScriptRegistry<T>::GetScriptById(I); \
++    if (!V) \
++        return R;
+ 
+ // This is the global static registry of scripts.
+ template<class TScript>
+@@ -125,36 +156,6 @@ class ScriptRegistry
+         static uint32 _scriptIdCounter;
+ };
+ 
+-// Utility macros to refer to the script registry.
+-#define SCR_REG_MAP(T) ScriptRegistry<T>::ScriptMap
+-#define SCR_REG_ITR(T) ScriptRegistry<T>::ScriptMapIterator
+-#define SCR_REG_LST(T) ScriptRegistry<T>::ScriptPointerList
+-
+-// Utility macros for looping over scripts.
+-#define FOR_SCRIPTS(T, C, E) \
+-    if (SCR_REG_LST(T).empty()) \
+-        return; \
+-    for (SCR_REG_ITR(T) C = SCR_REG_LST(T).begin(); \
+-        C != SCR_REG_LST(T).end(); ++C)
+-#define FOR_SCRIPTS_RET(T, C, E, R) \
+-    if (SCR_REG_LST(T).empty()) \
+-        return R; \
+-    for (SCR_REG_ITR(T) C = SCR_REG_LST(T).begin(); \
+-        C != SCR_REG_LST(T).end(); ++C)
+-#define FOREACH_SCRIPT(T) \
+-    FOR_SCRIPTS(T, itr, end) \
+-    itr->second
+-
+-// Utility macros for finding specific scripts.
+-#define GET_SCRIPT(T, I, V) \
+-    T* V = ScriptRegistry<T>::GetScriptById(I); \
+-    if (!V) \
+-        return;
+-#define GET_SCRIPT_RET(T, I, V, R) \
+-    T* V = ScriptRegistry<T>::GetScriptById(I); \
+-    if (!V) \
+-        return R;
+-
+ void DoScriptText(int32 iTextEntry, WorldObject* pSource, Unit* target)
+ {
+     if (!pSource)
+@@ -269,10 +270,12 @@ void ScriptMgr::Unload()
+     SCR_CLEAR(ServerScript);
+     SCR_CLEAR(WorldScript);
+     SCR_CLEAR(FormulaScript);
++    SCR_CLEAR(AllMapScript);
+     SCR_CLEAR(WorldMapScript);
+     SCR_CLEAR(InstanceMapScript);
+     SCR_CLEAR(BattlegroundMapScript);
+     SCR_CLEAR(ItemScript);
++    SCR_CLEAR(AllCreatureScript);
+     SCR_CLEAR(CreatureScript);
+     SCR_CLEAR(GameObjectScript);
+     SCR_CLEAR(AreaTriggerScript);
+@@ -289,6 +292,7 @@ void ScriptMgr::Unload()
+     SCR_CLEAR(PlayerScript);
+     SCR_CLEAR(GuildScript);
+     SCR_CLEAR(GroupScript);
++    SCR_CLEAR(UnitScript);
+ 
+     #undef SCR_CLEAR
+ }
+@@ -650,6 +654,8 @@ void ScriptMgr::OnUnloadGridMap(Map* map, GridMap* gmap, uint32 gx, uint32 gy)
+ 
+ void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
+ {
++    FOREACH_SCRIPT(AllMapScript)->OnPlayerEnterAll(map, player);
++
+     ASSERT(map);
+     ASSERT(player);
+ 
+@@ -668,6 +674,8 @@ void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
+ 
+ void ScriptMgr::OnPlayerLeaveMap(Map* map, Player* player)
+ {
++    FOREACH_SCRIPT(AllMapScript)->OnPlayerLeaveAll(map, player);
++
+     ASSERT(map);
+     ASSERT(player);
+ 
+@@ -853,12 +861,19 @@ CreatureAI* ScriptMgr::GetCreatureAI(Creature* creature)
+ 
+ void ScriptMgr::OnCreatureUpdate(Creature* creature, uint32 diff)
+ {
++    FOREACH_SCRIPT(AllCreatureScript)->OnAllCreatureUpdate(creature, diff);
++
+     ASSERT(creature);
+ 
+     GET_SCRIPT(CreatureScript, creature->GetScriptId(), tmpscript);
+     tmpscript->OnUpdate(creature, diff);
+ }
+ 
++void ScriptMgr::Creature_SelectLevel(const CreatureTemplate *cinfo, Creature* creature)
++{
++    FOREACH_SCRIPT(AllCreatureScript)->Creature_SelectLevel(cinfo, creature);
++}
++
+ bool ScriptMgr::OnGossipHello(Player* player, GameObject* go)
+ {
+     ASSERT(player);
+@@ -1184,6 +1199,22 @@ void ScriptMgr::OnShutdown()
+     FOREACH_SCRIPT(WorldScript)->OnShutdown();
+ }
+ 
++void ScriptMgr::SetInitialWorldSettings()
++{
++    FOREACH_SCRIPT(WorldScript)->SetInitialWorldSettings();
++}
++
++float ScriptMgr::VAS_Script_Hooks()
++{
++    float VAS_Script_Hook_Version = 1.03f;
++
++    sLog->outString("----------------------------------------------------");
++    sLog->outString("  Powered by {VAS} Script Hooks v%4.2f",VAS_Script_Hook_Version);
++    sLog->outString("----------------------------------------------------");
++
++    return VAS_Script_Hook_Version;
++}
++
+ bool ScriptMgr::OnCriteriaCheck(AchievementCriteriaData const* data, Player* source, Unit* target)
+ {
+     ASSERT(source);
+@@ -1412,6 +1443,30 @@ void ScriptMgr::OnGroupDisband(Group* group)
+     FOREACH_SCRIPT(GroupScript)->OnDisband(group);
+ }
+ 
++//Called From Unit::DealDamage
++uint32 ScriptMgr::DealDamage(Unit* AttackerUnit, Unit *pVictim, uint32 damage, DamageEffectType damagetype)
++{
++    FOR_SCRIPTS_RET(UnitScript, itr, end, damage)
++        damage = itr->second->DealDamage(AttackerUnit, pVictim, damage, damagetype);
++    return damage;
++}
++
++void ScriptMgr::CalculateSpellDamageTaken(SpellNonMeleeDamage *damageInfo, int32 damage, SpellInfo const *spellInfo, WeaponAttackType attackType, bool crit)
++{
++    FOREACH_SCRIPT(UnitScript)->CalculateSpellDamageTaken(damageInfo, damage, spellInfo, attackType, crit);
++}
++
++void ScriptMgr::CalculateMeleeDamage(Unit *pVictim, uint32 damage, CalcDamageInfo *damageInfo, WeaponAttackType attackType)
++{
++    FOREACH_SCRIPT(UnitScript)->CalculateMeleeDamage(pVictim, damage, damageInfo, attackType);
++}
++
++UnitScript::UnitScript(const char* name)
++: ScriptObject(name)
++{
++    ScriptRegistry<UnitScript>::AddScript(this);
++}
++
+ SpellScriptLoader::SpellScriptLoader(const char* name)
+     : ScriptObject(name)
+ {
+@@ -1436,6 +1491,12 @@ FormulaScript::FormulaScript(const char* name)
+     ScriptRegistry<FormulaScript>::AddScript(this);
+ }
+ 
++AllMapScript::AllMapScript(const char* name)
++    : ScriptObject(name)
++{
++    ScriptRegistry<AllMapScript>::AddScript(this);
++}
++
+ WorldMapScript::WorldMapScript(const char* name, uint32 mapId)
+     : ScriptObject(name), MapScript<Map>(mapId)
+ {
+@@ -1469,6 +1530,12 @@ ItemScript::ItemScript(const char* name)
+     ScriptRegistry<ItemScript>::AddScript(this);
+ }
+ 
++AllCreatureScript::AllCreatureScript(const char* name)
++: ScriptObject(name)
++{
++    ScriptRegistry<AllCreatureScript>::AddScript(this);
++}
++
+ CreatureScript::CreatureScript(const char* name)
+     : ScriptObject(name)
+ {
+@@ -1574,10 +1641,12 @@ template class ScriptRegistry<SpellScriptLoader>;
+ template class ScriptRegistry<ServerScript>;
+ template class ScriptRegistry<WorldScript>;
+ template class ScriptRegistry<FormulaScript>;
++template class ScriptRegistry<AllMapScript>;
+ template class ScriptRegistry<WorldMapScript>;
+ template class ScriptRegistry<InstanceMapScript>;
+ template class ScriptRegistry<BattlegroundMapScript>;
+ template class ScriptRegistry<ItemScript>;
++template class ScriptRegistry<AllCreatureScript>;
+ template class ScriptRegistry<CreatureScript>;
+ template class ScriptRegistry<GameObjectScript>;
+ template class ScriptRegistry<AreaTriggerScript>;
+@@ -1594,6 +1663,7 @@ template class ScriptRegistry<AchievementCriteriaScript>;
+ template class ScriptRegistry<PlayerScript>;
+ template class ScriptRegistry<GuildScript>;
+ template class ScriptRegistry<GroupScript>;
++template class ScriptRegistry<UnitScript>;
+ 
+ // Undefine utility macros.
+ #undef GET_SCRIPT_RET
+diff --git a/src/server/game/Scripting/ScriptMgr.h b/src/server/game/Scripting/ScriptMgr.h
+index b3d445a..d39b18e 100755
+--- a/src/server/game/Scripting/ScriptMgr.h
++++ b/src/server/game/Scripting/ScriptMgr.h
+@@ -190,6 +190,19 @@ template<class TObject> class UpdatableScript
+         virtual void OnUpdate(TObject* /*obj*/, uint32 /*diff*/) { }
+ };
+ 
++class UnitScript : public ScriptObject
++{
++    protected:
++
++        UnitScript(const char* name);
++
++    public:
++
++        virtual uint32 DealDamage(Unit* AttackerUnit, Unit *pVictim, uint32 damage, DamageEffectType damagetype) { return damage;}
++        virtual void CalculateSpellDamageTaken(SpellNonMeleeDamage *damageInfo, int32 damage, SpellInfo const *spellInfo, WeaponAttackType attackType, bool crit) { }
++        virtual void CalculateMeleeDamage(Unit *pVictim, uint32 damage, CalcDamageInfo *damageInfo, WeaponAttackType attackType) { }
++};
++
+ class SpellScriptLoader : public ScriptObject
+ {
+     protected:
+@@ -272,6 +285,9 @@ class WorldScript : public ScriptObject
+ 
+         // Called when the world is actually shut down.
+         virtual void OnShutdown() { }
++
++        // Called at End of SetInitialWorldSettings.
++        virtual void SetInitialWorldSettings() { }
+ };
+ 
+ class FormulaScript : public ScriptObject
+@@ -344,6 +360,21 @@ template<class TMap> class MapScript : public UpdatableScript<TMap>
+         virtual void OnUpdate(TMap* /*map*/, uint32 /*diff*/) { }
+ };
+ 
++class AllMapScript : public ScriptObject
++{
++    protected:
++
++        AllMapScript(const char* name);
++
++    public:
++
++        // Called when a player enters any Map
++        virtual void OnPlayerEnterAll(Map* /*map*/, Player* /*player*/) { }
++
++        // Called when a player leave any Map
++        virtual void OnPlayerLeaveAll(Map* /*map*/, Player* /*player*/) { }
++};
++
+ class WorldMapScript : public ScriptObject, public MapScript<Map>
+ {
+     protected:
+@@ -436,6 +467,21 @@ class CreatureScript : public ScriptObject, public UpdatableScript<Creature>
+         virtual CreatureAI* GetAI(Creature* /*creature*/) const { return NULL; }
+ };
+ 
++class AllCreatureScript : public ScriptObject
++{
++    protected:
++
++        AllCreatureScript(const char* name);
++
++    public:
++
++        // Called from End of Creature Update.
++        virtual void OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/) { }
++
++        // Called from End of Creature SelectLevel.
++        virtual void Creature_SelectLevel(const CreatureTemplate* /*cinfo*/, Creature* /*creature*/) { }
++};
++
+ class GameObjectScript : public ScriptObject, public UpdatableScript<GameObject>
+ {
+     protected:
+@@ -822,6 +868,12 @@ class ScriptMgr
+         ScriptMgr();
+         virtual ~ScriptMgr();
+ 
++    public: /* UnitScriptLoader */
++
++        uint32 DealDamage(Unit* AttackerUnit, Unit *pVictim,uint32 damage,DamageEffectType damagetype);
++        void CalculateSpellDamageTaken(SpellNonMeleeDamage *damageInfo, int32 damage, SpellInfo const *spellInfo, WeaponAttackType attackType, bool crit);
++        void CalculateMeleeDamage(Unit *pVictim, uint32 damage, CalcDamageInfo *damageInfo, WeaponAttackType attackType);
++
+     public: /* Initialization */
+ 
+         void Initialize();
+@@ -837,6 +889,10 @@ class ScriptMgr
+ 
+         void Unload();
+ 
++    public: /* {VAS} Script Hooks */
++
++        float VAS_Script_Hooks();
++
+     public: /* SpellScriptLoader */
+ 
+         void CreateSpellScripts(uint32 spellId, std::list<SpellScript*>& scriptVector);
+@@ -863,6 +919,7 @@ class ScriptMgr
+         void OnWorldUpdate(uint32 diff);
+         void OnStartup();
+         void OnShutdown();
++        void SetInitialWorldSettings();
+ 
+     public: /* FormulaScript */
+ 
+@@ -874,6 +931,11 @@ class ScriptMgr
+         void OnGainCalculation(uint32& gain, Player* player, Unit* unit);
+         void OnGroupRateCalculation(float& rate, uint32 count, bool isRaid);
+ 
++    public: /* AllScript */
++
++        void OnPlayerEnterMapAll(Map* map, Player* player);
++        void OnPlayerLeaveMapAll(Map* map, Player* player);
++
+     public: /* MapScript */
+ 
+         void OnCreateMap(Map* map);
+@@ -895,6 +957,11 @@ class ScriptMgr
+         bool OnItemUse(Player* player, Item* item, SpellCastTargets const& targets);
+         bool OnItemExpire(Player* player, ItemTemplate const* proto);
+ 
++    public: /* AllCreatureScript */
++
++        void OnAllCreatureUpdate(Creature* creature, uint32 diff);
++        void Creature_SelectLevel(const CreatureTemplate *cinfo, Creature* creature);
++
+     public: /* CreatureScript */
+ 
+         bool OnDummyEffect(Unit* caster, uint32 spellId, SpellEffIndex effIndex, Creature* target);
+diff --git a/src/server/game/World/World.cpp b/src/server/game/World/World.cpp
+index 3aee1dc..e57dd15 100755
+--- a/src/server/game/World/World.cpp
++++ b/src/server/game/World/World.cpp
+@@ -1201,6 +1201,26 @@ void World::LoadConfigSettings(bool reload)
+     m_bool_configs[CONFIG_PDUMP_NO_PATHS] = ConfigMgr::GetBoolDefault("PlayerDump.DisallowPaths", true);
+     m_bool_configs[CONFIG_PDUMP_NO_OVERWRITE] = ConfigMgr::GetBoolDefault("PlayerDump.DisallowOverwrite", true);
+ 
++    m_int_configs[VAS_VasDebug] = ConfigMgr::GetIntDefault ("VAS.AutoBalance.Debug", 1);
++    m_int_configs[VAS_DebugByID] = ConfigMgr::GetIntDefault ("VAS.AutoBalance.DebugByID", 0);
++    m_int_configs[VAS_AutoInstance] = ConfigMgr::GetIntDefault ("VAS.AutoBalance.AutoInstance", 1);
++    m_int_configs[VAS_PlayerChangeNotify] = ConfigMgr::GetIntDefault ("VAS.AutoBalance.PlayerChangeNotify", 1);
++
++    m_float_configs[VAS_Creature_Update_Timer] = ConfigMgr::GetFloatDefault("VAS.AutoBalance.Creature.Update.Timer", 60.0f);
++    m_float_configs[VAS_Config_xPlayer] = ConfigMgr::GetFloatDefault("VAS.AutoBalance.XPlayer", 1.0f);
++    m_float_configs[VAS_Min_D_Mod] = ConfigMgr::GetFloatDefault("Min.D.Mod", 0.10f);
++    m_float_configs[VAS_Min_HP_Mod] = ConfigMgr::GetFloatDefault("Min.HP.Mod", 0.20f);
++    m_float_configs[VAS_VAS_Group_Modifer] = ConfigMgr::GetFloatDefault("VAS.Group.Modifer", 1.0f);
++    m_float_configs[VAS_VAS_Damage_Modifer] = ConfigMgr::GetFloatDefault("VAS.Damage.Modifer", 1.0f);
++
++    std::string VAS_AutoBalance_40_Name = ConfigMgr::GetStringDefault("VAS.AutoBalance.40.Name", "");
++    std::string VAS_AutoBalance_25_Name = ConfigMgr::GetStringDefault("VAS.AutoBalance.25.Name", "");
++    std::string VAS_AutoBalance_20_Name = ConfigMgr::GetStringDefault("VAS.AutoBalance.20.Name", "");
++    std::string VAS_AutoBalance_10_Name = ConfigMgr::GetStringDefault("VAS.AutoBalance.10.Name", "");
++    std::string VAS_AutoBalance_5_Name = ConfigMgr::GetStringDefault("VAS.AutoBalance.5.Name", "");
++    std::string VAS_AutoBalance_2_Name = ConfigMgr::GetStringDefault("VAS.AutoBalance.2.Name", "");
++    std::string VAS_color = ConfigMgr::GetStringDefault("VAS.AutoBalance.Color", "cffFF8000");
++
+     // call ScriptMgr if we're reloading the configuration
+     if (reload)
+         sScriptMgr->OnConfigLoad(reload);
+@@ -1753,3 +1773,5 @@ void World::SetInitialWorldSettings()
++    sScriptMgr->SetInitialWorldSettings();
++
+     // possibly enable db logging; avoid massive startup spam by doing it here.
+     if (sLog->GetLogDBLater())
+     {
+diff --git a/src/server/game/World/World.h b/src/server/game/World/World.h
+index f0dbc3c..06de9f4 100755
+--- a/src/server/game/World/World.h
++++ b/src/server/game/World/World.h
+@@ -180,6 +180,12 @@ enum WorldFloatConfigs
+     CONFIG_CREATURE_FAMILY_ASSISTANCE_RADIUS,
+     CONFIG_THREAT_RADIUS,
+     CONFIG_CHANCE_OF_GM_SURVEY,
++    VAS_Creature_Update_Timer,
++    VAS_Config_xPlayer,
++    VAS_Min_D_Mod,
++    VAS_Min_HP_Mod,
++    VAS_VAS_Group_Modifer,
++    VAS_VAS_Damage_Modifer,
+     FLOAT_CONFIG_VALUE_COUNT
+ };
+ 
+@@ -318,6 +324,10 @@ enum WorldIntConfigs
+     CONFIG_WARDEN_CLIENT_BAN_DURATION,
+     CONFIG_WARDEN_NUM_MEM_CHECKS,
+     CONFIG_WARDEN_NUM_OTHER_CHECKS,
++    VAS_VasDebug,
++    VAS_DebugByID,
++    VAS_AutoInstance,
++    VAS_PlayerChangeNotify,
+     INT_CONFIG_VALUE_COUNT
+ };
+ 
+@@ -609,6 +619,13 @@ class World
+ 
+         /// Get the path where data (dbc, maps) are stored on disk
+         std::string GetDataPath() const { return m_dataPath; }
++        std::string GetVAS40() const { return VAS_AutoBalance_40_Name; }
++        std::string GetVAS25() const { return VAS_AutoBalance_25_Name; }
++        std::string GetVAS20() const { return VAS_AutoBalance_20_Name; }
++        std::string GetVAS10() const { return VAS_AutoBalance_10_Name; }
++        std::string GetVAS5() const { return VAS_AutoBalance_5_Name; }
++        std::string GetVAS2() const { return VAS_AutoBalance_2_Name; }
++        std::string GetVASColor() const { return VAS_color; }
+ 
+         /// When server started?
+         time_t const& GetStartTime() const { return m_startTime; }
+@@ -772,6 +789,15 @@ class World
+     private:
+         static ACE_Atomic_Op<ACE_Thread_Mutex, bool> m_stopEvent;
+         static uint8 m_ExitCode;
++
++        std::string VAS_AutoBalance_40_Name;
++        std::string VAS_AutoBalance_25_Name;
++        std::string VAS_AutoBalance_20_Name;
++        std::string VAS_AutoBalance_10_Name;
++        std::string VAS_AutoBalance_5_Name;
++        std::string VAS_AutoBalance_2_Name;
++        std::string VAS_color;
++
+         uint32 m_ShutdownTimer;
+         uint32 m_ShutdownMask;
+ 
+diff --git a/src/server/scripts/Custom/CMakeLists.txt b/src/server/scripts/Custom/CMakeLists.txt
+index 62abde2..0d6fdd0 100755
+--- a/src/server/scripts/Custom/CMakeLists.txt
++++ b/src/server/scripts/Custom/CMakeLists.txt
+@@ -10,6 +10,7 @@
+ 
+ set(scripts_STAT_SRCS
+   ${scripts_STAT_SRCS}
++  Custom/VAS_AutoBalance.cpp
+ )
+ 
+ message("  -> Prepared: Custom")
+diff --git a/src/server/scripts/Custom/VAS_AutoBalance.cpp b/src/server/scripts/Custom/VAS_AutoBalance.cpp
+new file mode 100755
+index 0000000..a2d4b4f
+--- /dev/null
++++ b/src/server/scripts/Custom/VAS_AutoBalance.cpp
+@@ -0,0 +1,768 @@
++/*
++ * Copyright (C) 2008-2010 TrinityCore <http://www.trinitycore.org/>
++ * Copyright (C) 2006-2009 ScriptDev2 <https://scriptdev2.svn.sourceforge.net/>
++ * Copyright (C) 1985-2010 {VAS} KalCorp  <http://vasserver.dyndns.org/>
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 2 of the License, or (at your
++ * option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program. If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/* ScriptData
++SDName: VAS.AutoBalance
++SD%Complete: 50
++SDComment:By KalCorp and Vaughner
++SDCategory: Script VAS
++EndScriptData */
++
++
++#include "ScriptPCH.h"
++#include "Configuration/Config.h"
++#include "MapManager.h"
++#include "Map.h"
++
++#define BOOL_TO_STRING(b) ((b)? "true":"false")
++
++ float VAS_version = 1.04f;
++ int VAS_Sub_version = 10;
++ int Creature_Update_Timer = 60;
++ int AutoInstance = 1;
++ int PlayerChangeNotify = 1;
++ int VasDebug = 1;
++ int DebugByID = 0;
++ float Config_xPlayer = 1.0f;
++ float Min_D_Mod = 0.10f;
++ float Min_HP_Mod = 0.20f;
++ float VAS_Group_Modifer = 1.0f;
++ float VAS_Damage_Modifer = 1.0f;
++ float VAS_Script_Hook_VersionNeeded = 1.01f;
++ float VAS_Hook_Version_Installed = 0.0f;
++ bool VAS_Hook_Check = false;
++ std::string VAS_AutoBalance_Color = "cffFF8000";
++
++ struct sVASCreatureInfo
++    {
++        uint32 CoolDown;
++        int LastPlayerCount;
++        float damagemod;
++    };
++ static std::map<uint32, sVASCreatureInfo> VASCreatureInfo;
++
++/* inline const char * const BoolToString(bool b)
++{
++    return b ? "true" : "false";
++} */
++
++bool VAS_AutoBalance_CheckID(std::string VASCheckNameString,int VASCheckID)
++    {
++            std::string map_str;
++            std::stringstream map_ss;
++            map_ss.str(VASCheckNameString);
++            while (std::getline(map_ss, map_str, ','))
++            {
++                std::stringstream ss2(map_str);
++                int map_num = -1;
++                ss2 >> map_num;
++                if (map_num >= 0)
++                {
++                    if (map_num == VASCheckID)
++                    return true;
++                }
++            }
++        return false;
++    }
++
++bool VAS_AutoBalance_CheckINIMaps(std::string pMapIdString,int VASmapid)
++    {
++        std::string map_str;
++        std::stringstream map_ss;
++        map_ss.str(pMapIdString);
++        while (std::getline(map_ss, map_str, ','))
++        {
++            std::stringstream ss2(map_str);
++            int map_num = -1;
++            ss2 >> map_num;
++            if (map_num >= 0)
++            {
++                if (map_num == VASmapid)
++                    return true;
++            }
++        }
++        return false;
++    }
++
++class VAS_AutoBalance_WorldScript : public WorldScript
++{
++    public:
++        VAS_AutoBalance_WorldScript()
++            : WorldScript("VAS_AutoBalance_WorldScript")
++        {
++        }
++
++    void OnConfigLoad(bool /*reload*/)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VasDebug >= 3)
++            sLog->outString("### VAS_AutoBalance_WorldScript - OnConfigLoad");
++    }
++
++    void OnStartup()
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VasDebug >= 3)
++            sLog->outString("### VAS_AutoBalance_WorldScript - OnStartup" );
++    }
++
++    void SetInitialWorldSettings()
++    {
++
++        // Added so you can not compile without needed VAS_Script_Hooks!
++        VAS_Hook_Version_Installed = sScriptMgr->VAS_Script_Hooks();
++
++        sLog->outString("----------------------------------------------------");
++        sLog->outString("  Powered by {VAS} AutoBalance v%4.2f.%u ",VAS_version,VAS_Sub_version);
++        sLog->outString("----------------------------------------------------");
++
++        VasDebug = sWorld->getIntConfig(VAS_VasDebug);
++        DebugByID = sWorld->getIntConfig(VAS_DebugByID);
++        Creature_Update_Timer = sWorld->getFloatConfig(VAS_Creature_Update_Timer);
++        AutoInstance = sWorld->getIntConfig(VAS_AutoInstance);
++        PlayerChangeNotify = sWorld->getIntConfig(VAS_PlayerChangeNotify);
++        Config_xPlayer = sWorld->getFloatConfig(VAS_Config_xPlayer);
++        Min_D_Mod = sWorld->getFloatConfig(VAS_Min_D_Mod);
++        Min_HP_Mod = sWorld->getFloatConfig(VAS_Min_HP_Mod);
++        VAS_Group_Modifer = sWorld->getFloatConfig(VAS_VAS_Group_Modifer);
++        VAS_Damage_Modifer = sWorld->getFloatConfig(VAS_VAS_Damage_Modifer);
++
++        if (VAS_Hook_Version_Installed >= VAS_Script_Hook_VersionNeeded)
++        {
++            sLog->outString("  VAS_Script_Hooks v%4.2f Found",VAS_Hook_Version_Installed);
++        }
++        else
++        {
++            sLog->outString("  VAS_Script_Hooks v%4.2f Found",VAS_Hook_Version_Installed);
++            sLog->outString("  This Mod needs %4.2f+ to run correctly!",VAS_Script_Hook_VersionNeeded);
++            Config_xPlayer = 0;
++        }
++
++        if (Config_xPlayer >= 1)
++        {
++            sLog->outString("  xPlayer = %4.1f ", Config_xPlayer);
++            sLog->outString("  AutoInstance = %u ", AutoInstance);
++            sLog->outString("  PlayerChangeNotify = %u ", PlayerChangeNotify);
++
++            sLog->outString("  Min.D.Mod = %4.2f ", Min_D_Mod);
++            sLog->outString("  Min.HP.Mod = %4.2f ", Min_HP_Mod);
++            sLog->outString("  VAS.Group.Modifer = %4.2f ", VAS_Group_Modifer);
++            sLog->outString("  VAS.Damage.Modifer = %4.2f ", VAS_Damage_Modifer);
++
++            sLog->outString("  VasDebug   =  %u ", VasDebug);
++
++            // VasDebug From 0 to 4
++            if (VasDebug <= 0)
++            {
++                VasDebug = 0;
++                sLog->outString("  VasDebug reset back to 0.  Set from 0 to 4");
++            }
++
++            if (VasDebug >= 5)
++            {
++                VasDebug = 4;
++                sLog->outString("  VasDebug reset back to 3.  Set from 0 to 4");
++            }
++
++            sLog->outString("  DebugByID   =  %u", DebugByID);
++            sLog->outString("  Creature_Update_Timer   =  %u", Creature_Update_Timer);
++
++            // Do not let Creature_Update_Timer go below 5 sec's
++            if (Creature_Update_Timer <= 4)
++            {
++                Creature_Update_Timer = 5;
++                sLog->outString("  Creature_Update_Timer reset back to 5.  Should be lower that that!");
++            }
++
++            VAS_AutoBalance_Color = sWorld->GetVASColor();
++            sLog->outString("  VAS.AutoBalance.Color = %s", VAS_AutoBalance_Color.c_str());
++
++        }
++        else
++            sLog->outString("  VAS Auto-Balance is Disabled  - xPlayer is set to 0 \n");
++
++        sLog->outString("----------------------------------------------------\n");
++    }
++
++};
++
++class VAS_AutoBalance_PlayerScript : public PlayerScript
++{
++    public:
++        VAS_AutoBalance_PlayerScript()
++            : PlayerScript("VAS_AutoBalance_PlayerScript")
++        {
++        }
++
++    void OnLogin(Player *Player)
++    {
++
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VasDebug >= 3)
++            sLog->outString("### VAS_AutoBalance_PlayerScript - OnLogin Player=%s", Player->GetName());
++
++        ChatHandler chH = ChatHandler(Player);
++        if (Config_xPlayer >= 1)
++        {
++            chH.PSendSysMessage("\n|%s----------------------------------------------------|r",VAS_AutoBalance_Color.c_str());
++            chH.PSendSysMessage("|%s  Powered by {VAS}AutoBalance v%4.2f.%u |r ",VAS_AutoBalance_Color.c_str(),VAS_version,VAS_Sub_version);
++        if (AutoInstance >= 1)
++            chH.PSendSysMessage("|%s  Auto Instance is Active |r",VAS_AutoBalance_Color.c_str());
++        else
++            chH.PSendSysMessage("|%s  Set for %4.1f Players|r ",VAS_AutoBalance_Color.c_str(),Config_xPlayer);
++        chH.PSendSysMessage("|%s----------------------------------------------------|r \n",VAS_AutoBalance_Color.c_str());
++        }
++    }
++};
++
++class VAS_AutoBalance_UnitScript : public UnitScript
++{
++    public:
++        VAS_AutoBalance_UnitScript()
++            : UnitScript("VAS_AutoBalance_UnitScript")
++        {
++        }
++
++    uint32 DealDamage(Unit* AttackerUnit, Unit *pVictim,uint32 damage, DamageEffectType damagetype)
++    {
++        if (Config_xPlayer <= 0)
++            return damage;
++
++
++        if (AttackerUnit->GetMap()->IsDungeon() && pVictim->GetMap()->IsDungeon())
++            if (AttackerUnit->GetTypeId() != TYPEID_PLAYER)
++            {
++                if (VasDebug >= 3)
++                    sLog->outString("### VAS_AutoBalance_UnitScript - VAS_Unit_DealDamage Attacker=%s Victim=%s Start Damage=%u",AttackerUnit->GetName(),pVictim->GetName(),damage);
++                damage = VAS_Modifer_DealDamage(AttackerUnit,damage);
++                if (VasDebug >= 3)
++                    sLog->outString("### VAS_AutoBalance_UnitScript - VAS_Unit_DealDamage Attacker=%s Victim=%s End Damage=%u",AttackerUnit->GetName(),pVictim->GetName(),damage);
++            }
++            return damage;
++    }
++
++    void CalculateSpellDamageTaken(SpellNonMeleeDamage *damageInfo, int32 damage, SpellEntry const *spellInfo, WeaponAttackType attackType, bool crit)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if ((damageInfo->attacker->GetMap()->IsDungeon() && damageInfo->target->GetMap()->IsDungeon()) || ( damageInfo->attacker->GetMap()->IsBattleground() && damageInfo->target->GetMap()->IsBattleground()))
++            if (damageInfo->attacker->GetTypeId() != TYPEID_PLAYER)
++            {
++                if (VasDebug >= 3)
++                    sLog->outString("### VAS_AutoBalance_UnitScript - CalculateSpellDamageTaken Attacker=%s Victim=%s Start Damage=%u",damageInfo->attacker->GetName(),damageInfo->target->GetName(),damageInfo->damage);
++
++                if (damageInfo->attacker->isHunterPet() || damageInfo->attacker->isPet() || damageInfo->attacker->isSummon() || damageInfo->attacker->IsControlledByPlayer())
++                    return;
++
++                float damagemod = VASCreatureInfo[damageInfo->attacker->GetGUID()].damagemod;
++                if (damagemod <= 0)
++                    damagemod =1.0f;
++
++                damageInfo->damage *= damagemod;
++
++                if (VasDebug >= 3)
++                    sLog->outString("### VAS_AutoBalance_UnitScript - CalculateSpellDamageTaken Attacker=%s Victim=%s End Damage=%u",damageInfo->attacker->GetName(),damageInfo->target->GetName(),damageInfo->damage);
++            }
++            return;
++    }
++
++    void CalculateMeleeDamage(Unit *pVictim, uint32 damage, CalcDamageInfo *damageInfo, WeaponAttackType attackType)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if ((damageInfo->attacker->GetMap()->IsDungeon() && damageInfo->target->GetMap()->IsDungeon()) || (damageInfo->attacker->GetMap()->IsBattleground() && damageInfo->target->GetMap()->IsBattleground()))
++            if (damageInfo->attacker->GetTypeId() != TYPEID_PLAYER)
++            {
++                if (VasDebug >= 3)
++                    sLog->outString("### VAS_AutoBalance_UnitScript - CalculateMeleeDamage Attacker=%s Victim=%s Start Damage=%u",damageInfo->attacker->GetName(),damageInfo->target->GetName(),damageInfo->damage);
++
++                if (damageInfo->attacker->isHunterPet() || damageInfo->attacker->isPet() || damageInfo->attacker->isSummon() || damageInfo->attacker->IsControlledByPlayer())
++                    return;
++
++                float damagemod = VASCreatureInfo[damageInfo->attacker->GetGUID()].damagemod;
++                if (damagemod <= 0)
++                    damagemod =1.0f;
++
++                damageInfo->damage *= damagemod;
++
++                if (VasDebug >= 3)
++                    sLog->outString("### VAS_AutoBalance_UnitScript - CalculateMeleeDamage Attacker=%s Victim=%s End Damage=%u",damageInfo->attacker->GetName(),damageInfo->target->GetName(),damageInfo->damage);
++            }
++            return;
++    }
++
++    uint32 VAS_Modifer_DealDamage(Unit* AttackerUnit,uint32 damage)
++    {
++
++    if (AttackerUnit->isHunterPet() || AttackerUnit->isPet() || AttackerUnit->isSummon() || AttackerUnit->IsControlledByPlayer())
++        return damage;
++
++    float damagemod = VASCreatureInfo[AttackerUnit->GetGUID()].damagemod;
++
++    if (damagemod <= 0)
++        damagemod =1.0f;
++
++    return damage*damagemod;
++
++    }
++
++};
++
++
++class VAS_AutoBalance_AllMapScript : public AllMapScript
++{
++    public:
++        VAS_AutoBalance_AllMapScript()
++            : AllMapScript("VAS_AutoBalance_AllMapScript")
++        {
++        }
++
++    void OnPlayerEnterAll(Map* map, Player* player)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        int VasMapID = player->GetMapId();
++        int VAS_PlayersInMap = map->GetPlayersCountExceptGMs();
++
++        ChatHandler chH = ChatHandler(player);
++
++        bool IsHeroic = player->GetMap()->IsHeroic();
++        bool IsRaid = player->GetMap()->IsRaid();
++        bool IsRegularDifficulty = player->GetMap()->IsRegularDifficulty();
++        bool IsRaidOrHeroicDungeon = player->GetMap()->IsRaidOrHeroicDungeon();
++        bool IsNonRaidDungeon = player->GetMap()->IsNonRaidDungeon();
++
++        uint32 maxPlayers = ((InstanceMap*)sMapMgr->FindMap(player->GetMapId(), player->GetInstanceId()))->GetMaxPlayers();
++
++        if (VasDebug >= 2)
++        {
++            sLog->outString("----------------------------------------------------");
++            sLog->outString("## VAS_AutoBalance_AllMapScript - OnPlayerEnterAll");
++            sLog->outString("## For InsatanceID %u",map->GetInstanceId());
++            sLog->outString("## IsDungeon= %u",map->GetEntry()->IsDungeon());
++            sLog->outString("## For Map %u",VasMapID);
++            sLog->outString("## PlayersInMap %u",VAS_PlayersInMap);
++            sLog->outString("## pDifficulty %u",uint32(player->GetDifficulty(player->GetMap()->IsHeroic())));
++            sLog->outString("## pGetDungeonDifficulty %u",uint32(player->GetDungeonDifficulty()));
++            sLog->outString("## pGetRaidDifficulty %u",uint32(player->GetRaidDifficulty()));
++            sLog->outString("## maxPlayers %u",maxPlayers);
++            sLog->outString("## IsHeroic=%s IsRaid=%s IsRegularDifficulty=%s IsRaidOrHeroicDungeon=%s IsNonRaidDungeon=%s",BOOL_TO_STRING(IsHeroic),BOOL_TO_STRING(IsRaid),BOOL_TO_STRING(IsRegularDifficulty),BOOL_TO_STRING(IsRaidOrHeroicDungeon),BOOL_TO_STRING(IsNonRaidDungeon));
++            sLog->outString("----------------------------------------------------\n");
++        }
++
++        if (PlayerChangeNotify >= 1)
++            if ((map->GetEntry()->IsDungeon()) && !player->isGameMaster() )
++            {
++                Map::PlayerList const &PlayerList = map->GetPlayers();
++                if (!PlayerList.isEmpty())
++                    for (Map::PlayerList::const_iterator itr = PlayerList.begin(); itr != PlayerList.end(); ++itr)
++                        if (Player* pPlr = itr->getSource())
++                        {
++                            ChatHandler chH = ChatHandler(pPlr);
++                            chH.PSendSysMessage("|cffFF0000 [VAS-AutoBalance]|r|%s %s entered the Instance %s.|r \n|%s                                   Auto setting player count to %u |r",VAS_AutoBalance_Color.c_str(),player->GetName(),map->GetMapName(),VAS_AutoBalance_Color.c_str(),VAS_PlayersInMap);
++                        }
++            }
++
++    }
++
++    void OnPlayerLeaveAll(Map* map, Player* player)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VasDebug >= 3)
++            sLog->outString("#### VAS_AutoBalance_AllMapScript - OnPlayerLeaveAll map=%s player=%s", map->GetMapName(),player->GetName());
++
++        int VasMapID = player->GetMapId();
++        int VAS_PlayersInMap = map->GetPlayersCountExceptGMs();
++
++        if (VAS_PlayersInMap >= 1)
++            VAS_PlayersInMap -= 1;
++
++        if (VAS_PlayersInMap >=1)
++        {
++            ChatHandler chH = ChatHandler(player);
++
++            if (VasDebug >= 2)
++            {
++                sLog->outString("----------------------------------------------------");
++                sLog->outString("## VAS_AutoBalance_AllMapScript - OnPlayerLeaveAll");
++                sLog->outString("## For InsatanceID %u",map->GetInstanceId());
++                sLog->outString("## IsDungeon= %u",map->GetEntry()->IsDungeon());
++                sLog->outString("## For Map %u",VasMapID);
++                sLog->outString("## PlayersInMap %u",VAS_PlayersInMap);
++                sLog->outString("----------------------------------------------------\n");
++            }
++
++            if (PlayerChangeNotify >= 1)
++                if ((map->GetEntry()->IsDungeon()) && !player->isGameMaster() )
++                {
++                    Map::PlayerList const &PlayerList = map->GetPlayers();
++                    if (!PlayerList.isEmpty())
++                        for (Map::PlayerList::const_iterator itr = PlayerList.begin(); itr != PlayerList.end(); ++itr)
++                            if (Player* pPlr = itr->getSource())
++                            {
++                                ChatHandler chH = ChatHandler(pPlr);
++                                chH.PSendSysMessage("|cffFF0000 [VAS-AutoBalance]|r|%s %s left the Instance %s.|r \n|%s                                   Auto setting player count to %u |r",VAS_AutoBalance_Color.c_str(),player->GetName(),map->GetMapName(),VAS_AutoBalance_Color.c_str(),VAS_PlayersInMap);
++                            }
++                }
++        }
++    }
++};
++
++class VAS_AutoBalance_WorldMapScript : public WorldMapScript
++{
++    public:
++        VAS_AutoBalance_WorldMapScript()
++            : WorldMapScript("VAS_AutoBalance_WorldMapScript",0)
++        {
++        }
++
++    void OnPlayerEnter(Map* map, Player* player)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VasDebug >= 3)
++            sLog->outString("### VAS_AutoBalance_WorldMapScript - OnPlayerEnter Map=%s player=%s",map->GetMapName(),player->GetName());
++    }
++
++    void OnPlayerLeave(Map* map, Player* player)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VasDebug >= 3)
++            sLog->outString("### VAS_AutoBalance_WorldMapScript - OnPlayerLeave Map=%s player=%s",map->GetMapName(),player->GetName());
++    }
++};
++
++
++class VAS_AutoBalance_AllCreatureScript : public AllCreatureScript
++{
++    public:
++        VAS_AutoBalance_AllCreatureScript()
++            : AllCreatureScript("VAS_AutoBalance_AllCreatureScript")
++        {
++        }
++
++
++    void Creature_SelectLevel(const CreatureTemplate *cinfo, Creature* creature)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (creature->GetMap()->IsDungeon())
++        {
++            VAS_Modifer_Health_Mana(creature);
++            if (VasDebug >= 4)
++                sLog->outString("### VAS_AutoBalance_VASScript - VAS_Creature_SelectLevel InstanceID=%u   Creature=%s",creature->GetInstanceId(),cinfo->Name.c_str());
++        }
++    }
++
++    void OnAllCreatureUpdate(Creature* creature, uint32 diff)
++    {
++        if (Config_xPlayer <= 0)
++            return;
++
++        if (VASCreatureInfo[creature->GetGUID()].CoolDown <= diff)
++            {
++                VASCreatureInfo[creature->GetGUID()].CoolDown = 0;
++                if (creature->GetMap()->IsDungeon() || creature->GetMap()->IsBattleground())
++                    VAS_Modifer_Health_Mana(creature);
++                VASCreatureInfo[creature->GetGUID()].CoolDown = Creature_Update_Timer * IN_MILLISECONDS;
++             }
++            else
++                VASCreatureInfo[creature->GetGUID()].CoolDown -= diff;
++    }
++
++    void VAS_Modifer_Health_Mana(Creature* creature)
++    {
++
++    Player* cplayer = NULL;
++
++    float Xplayer = Config_xPlayer;
++    if (Xplayer <= 0)
++        return;
++
++    if (creature->isHunterPet() || creature->isPet() || creature->isSummon() || creature->IsControlledByPlayer())
++        return;
++
++    uint32 PlayersInCreaturesInstance = 0;
++    Map::PlayerList const &PlayerList = creature->GetMap()->GetPlayers();
++    if (!PlayerList.isEmpty())
++        for (Map::PlayerList::const_iterator itr = PlayerList.begin(); itr != PlayerList.end(); ++itr)
++            if (Player* pPlr = itr->getSource())
++                if ((pPlr->GetInstanceId() == creature->GetInstanceId()) && !pPlr->isGameMaster())
++                {
++                    PlayersInCreaturesInstance += 1;
++                    cplayer = pPlr;
++                }
++
++    if (AutoInstance >= 1)
++    {
++        Xplayer = PlayersInCreaturesInstance;
++        VASCreatureInfo[creature->GetGUID()].LastPlayerCount = Xplayer;
++        if (Xplayer <= 0)
++            return;
++    }
++
++    CreatureTemplate const *cinfo = creature->GetCreatureTemplate();
++    int VASEntry = cinfo->Entry;
++
++    uint8 level = creature->getLevel();
++    CreatureBaseStats const* stats = sObjectMgr->GetCreatureBaseStats(level, cinfo->unit_class);
++
++    float healthmod = 1.0f;
++    uint32 basehp = stats->GenerateHealth(cinfo);
++    uint32 VASbasehp = (basehp * healthmod);
++
++    float VAShealthmod = healthmod;
++    float VAS_Modifer = 1.0;
++    float VAS_Modifer2 = 1.0;
++    int VasMapID = creature->GetMapId();
++    bool VAS_Changed = false;
++    Min_D_Mod = 0.10f;
++    Min_HP_Mod = 0.30f;
++    //VAS_Group_Modifer = 1.0f;
++    //VAS_Damage_Modifer = 1.0f;
++    std::string VASName = cinfo->Name;
++
++        //   VAS SOLO  - By MobID
++        if (VAS_AutoBalance_CheckID(sWorld->GetVAS40(),VASEntry) && ( (40-Xplayer) > 0 ))
++            {VAS_Modifer =40;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - NPC ID=%u Found in VAS-AutoBalance.40.Name",VasMapID);
++            VAS_Changed = true;}
++        if (VAS_AutoBalance_CheckID(sWorld->GetVAS25(),VASEntry) && ( (25-Xplayer) > 0 ))
++            {VAS_Modifer = 25;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - NPC ID=%u Found in VAS-AutoBalance.25.Name",VasMapID);
++            VAS_Changed = true;}
++        if (VAS_AutoBalance_CheckID(sWorld->GetVAS20(),VASEntry) && ( (20-Xplayer) > 0 ))
++            {VAS_Modifer = 20;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - NPC ID=%u Found in VAS-AutoBalance.20.Name",VasMapID);
++            VAS_Changed = true;}
++        if (VAS_AutoBalance_CheckID(sWorld->GetVAS10(),VASEntry) && ( (10-Xplayer) > 0 ))
++            {VAS_Modifer = 10;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - NPC ID=%u Found in VAS-AutoBalance.10.Name",VasMapID);
++            VAS_Changed = true;}
++        if (VAS_AutoBalance_CheckID(sWorld->GetVAS5(),VASEntry) && ( (5-Xplayer) > 0 ))
++            {VAS_Modifer = 5;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - NPC ID=%u Found in VAS-AutoBalance.5.Name",VasMapID);
++            VAS_Changed = true;}
++        if (VAS_AutoBalance_CheckID(sWorld->GetVAS2(),VASEntry) && ( (2-Xplayer) > 0 ))
++            {VAS_Modifer = 2;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - NPC ID=%u Found in VAS-AutoBalance.2.Name",VasMapID);
++            VAS_Changed = true;}
++
++        //   VAS SOLO  - Map 0,1 and 530 ( World Mobs )
++        if ((VasMapID == 0 || VasMapID == 1 || VasMapID == 530 ) && (basehp*healthmod) > 200001)
++            {VAS_Modifer = 40;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - Map 0,1,530 and HP > 200000 setting to 40 group");
++            VAS_Changed = true;}
++        if ((VasMapID == 0 || VasMapID == 1 || VasMapID == 530 ) && (basehp*healthmod) > 140001 && (basehp*healthmod) <= 200000)
++            {VAS_Modifer = 25;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - Map 0,1,530 and HP > 140001 & < 200000 setting to 25 group");
++            VAS_Changed = true;}
++        if ((VasMapID == 0 || VasMapID == 1 || VasMapID == 530 ) && (basehp*healthmod) > 100001 && (basehp*healthmod) <= 140000)
++            {VAS_Modifer = 20;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - Map 0,1,530 and HP > 100001 & < 140000 setting to 20 group");
++            VAS_Changed = true;}
++        if ((VasMapID == 0 || VasMapID == 1 || VasMapID == 530 ) && (basehp*healthmod) > 40001 && (basehp*healthmod) <= 100000)
++            {VAS_Modifer = 10;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - Map 0,1,530 and HP > 40001 & < 100000 setting to 10 group");
++            VAS_Changed = true;}
++        if ((VasMapID == 0 || VasMapID == 1 || VasMapID == 530 ) && (basehp*healthmod) > 20001 && (basehp*healthmod) <= 40000)
++            {VAS_Modifer = 5;
++            if ((VasDebug >= 3) && (DebugByID == VASEntry))
++                sLog->outString("### VAS-AutoBalance - Map 0,1,530 and HP > 20001 & < 40000 setting to 5 group");
++            VAS_Changed = true;}
++
++    //   VAS SOLO  - Everything else!
++    if (!VAS_Changed)
++        {
++        if ( ((basehp*healthmod)) >= 20001 && ((basehp*healthmod)) <= 30000 && ( (2-Xplayer) > 0 ))
++            VAS_Modifer = 2;
++        if ( ((basehp*healthmod)) >= 30001 && ((basehp*healthmod)) <= 40000 && ( (3-Xplayer) > 0 ))
++            VAS_Modifer = 3;
++        if ( ((basehp*healthmod)) >= 40001 && ((basehp*healthmod)) <= 50000 && ( (4-Xplayer) > 0 ))
++            VAS_Modifer = 4;
++        if ( ((basehp*healthmod)) >= 50001 && ((basehp*healthmod)) <= 60000 && ( (5-Xplayer) > 0 ))
++            VAS_Modifer =5;
++        if ( ((basehp*healthmod)) >= 60001 && ((basehp*healthmod)) <= 70000 && ( (6-Xplayer) > 0 ))
++            VAS_Modifer = 6;
++        if ( ((basehp*healthmod)) >= 70001 && ((basehp*healthmod)) <= 80000 && ( (7-Xplayer) > 0 ))
++            VAS_Modifer = 7;
++        if ( ((basehp*healthmod)) >= 80001 && ((basehp*healthmod)) <= 90000 && ( (8-Xplayer) > 0 ))
++            VAS_Modifer = 8;
++        if ( ((basehp*healthmod)) >= 90001 && ((basehp*healthmod)) <= 100000 && ( (9-Xplayer) > 0 ))
++            VAS_Modifer = 9;
++        if ( ((basehp*healthmod)) >= 100001 && ( (10-Xplayer) > 0 ) )
++            VAS_Modifer = 10;
++
++        if ((VasDebug >= 3) && (DebugByID == VASEntry))
++            sLog->outString("### VAS-AutoBalance - Not Found in Maps or by ID setting Modifer to %f by Base HP",VAS_Modifer);
++        }
++
++        bool IsDungeon = creature->GetMap()->IsDungeon();
++        bool IsHeroic = creature->GetMap()->IsHeroic();
++        bool IsRaid = creature->GetMap()->IsRaid();
++        bool IsRegularDifficulty = creature->GetMap()->IsRegularDifficulty();
++        bool IsRaidOrHeroicDungeon = creature->GetMap()->IsRaidOrHeroicDungeon();
++        bool IsNonRaidDungeon = creature->GetMap()->IsNonRaidDungeon();
++
++        std::string sMapDifficulty="N/A";
++
++        uint32 MaxPlayers = 5;
++
++        if (IsDungeon)
++        {
++            VAS_Modifer = ((InstanceMap*)sMapMgr->FindMap(creature->GetMapId(), creature->GetInstanceId()))->GetMaxPlayers();
++            MaxPlayers = VAS_Modifer;
++
++            if(cplayer->GetDungeonDifficulty() == DUNGEON_DIFFICULTY_NORMAL){
++                sMapDifficulty="DUNGEON_DIFFICULTY_NORMAL";
++                Min_HP_Mod *= 0.75;
++                Min_D_Mod *= 0.75;
++            } else {
++                sMapDifficulty = (cplayer->GetDungeonDifficulty() == DUNGEON_DIFFICULTY_HEROIC)?"DUNGEON_DIFFICULTY_HEROIC" : "DUNGEON_DIFFICULTY_EPIC";
++            }
++
++            if (IsRaid){
++                if(cplayer->GetRaidDifficulty() == RAID_DIFFICULTY_10MAN_NORMAL){
++                    sMapDifficulty="RAID_DIFFICULTY_10MAN_NORMAL";
++                    Min_HP_Mod *= 0.75;
++                    Min_D_Mod *= 0.75;
++                }
++                if(cplayer->GetRaidDifficulty() == RAID_DIFFICULTY_25MAN_NORMAL){
++                    sMapDifficulty="RAID_DIFFICULTY_25MAN_NORMAL";
++                    Min_HP_Mod *= 0.75;
++                    Min_D_Mod *= 0.75;
++                }
++                sMapDifficulty = (cplayer->GetDungeonDifficulty() == RAID_DIFFICULTY_10MAN_HEROIC)?"RAID_DIFFICULTY_10MAN_HEROIC" : "RAID_DIFFICULTY_25MAN_HEROIC";
++            }
++
++        }
++        else{
++            if(cplayer->GetDifficulty(creature->GetMap()->IsHeroic()) == REGULAR_DIFFICULTY){
++                sMapDifficulty="REGULAR_DIFFICULTY";
++            }
++        }
++
++        VAS_Modifer2 = VAS_Modifer;
++        VAS_Modifer *= VAS_Group_Modifer;
++
++        if     (VAS_Modifer <= 0)
++            VAS_Modifer = 1;
++
++        healthmod = ((1/VAS_Modifer) * Xplayer);
++
++        // Can not be lower then Min_D_Mod
++        if ( healthmod <= Min_HP_Mod )
++            healthmod = Min_HP_Mod;
++
++        //  Allow more then normal ?
++        if (healthmod >= 1.0 )
++            healthmod =1.0f;
++
++    uint32 health = uint32(basehp * healthmod);
++
++        if (health <= 0)
++        {
++            if ((VasDebug >= 1) )
++                sLog->outString("# ERROR VAS-AutoBalance - Mob=%s Health %u <=0 setting to 1",VASName.c_str(),health);
++            health =1;
++        }
++
++        if ((VasDebug >= 2) && (DebugByID == VASEntry))
++            if ( VASbasehp != health)
++                {
++                    sLog->outString("## VAS-AutoBalance MobID=%u VasMapID=%u VASName=%s  GUID=%llu  PlayersInCreaturesInstance=%u",VASEntry,VasMapID, VASName.c_str(),creature->GetGUID(),PlayersInCreaturesInstance);
++                    sLog->outString("## VAS-AutoBalance sMapDifficulty=%s Health=%u / %u Xplayer=%4.2f   healthmod=%4.2f / %4.2f  VAS_Modifer=%4.2f  VAS_Group_Modifer=%4.2f",sMapDifficulty.c_str(),VASbasehp,health,Xplayer,VAShealthmod,healthmod,VAS_Modifer,VAS_Group_Modifer);
++                    sLog->outString("## VAS-AutoBalance maxPlayers=%u IsHeroic=%s IsRaid=%s IsRegularDifficulty=%s IsRaidOrHeroicDungeon=%s IsNonRaidDungeon=%s",MaxPlayers,BOOL_TO_STRING(IsHeroic),BOOL_TO_STRING(IsRaid),BOOL_TO_STRING(IsRegularDifficulty),BOOL_TO_STRING(IsRaidOrHeroicDungeon),BOOL_TO_STRING(IsNonRaidDungeon));
++                }
++
++    creature->SetCreateHealth(health);
++    creature->SetMaxHealth(health);
++    if (health > VASbasehp)
++        creature->SetHealth(health);
++    creature->ResetPlayerDamageReq();
++
++    uint32 mana = stats->GenerateMana(cinfo);
++    uint32 vasmana = mana;
++
++    if (Xplayer >= 1)
++        {
++        mana = ((mana/VAS_Modifer) * Xplayer);
++        if ((VasDebug >= 2) && (DebugByID == VASEntry))
++            if ( VASbasehp != health)
++                sLog->outString("## VAS-AutoBalance mana %u / %u",vasmana,mana);
++        }
++
++    creature->SetCreateMana(mana);
++    creature->SetMaxPower(POWER_MANA, mana);
++    creature->SetPower(POWER_MANA, mana);
++    creature->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, (float)health);
++    creature->SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, (float)mana);
++
++    VAS_Modifer2 *= VAS_Damage_Modifer;
++    float damagemod =  ((1/VAS_Modifer2) * Xplayer);
++
++    // Can not be less then Min_D_Mod
++    if ( damagemod <= Min_D_Mod )
++        damagemod = Min_D_Mod;
++
++    //  Allow more then normal ?
++    if (damagemod >= 1.0 )
++        damagemod =1.0f;
++
++    VASCreatureInfo[creature->GetGUID()].damagemod = damagemod;
++    }
++};
++
++void AddSC_VAS_AutoBalance()
++{
++    new VAS_AutoBalance_WorldScript;
++    new VAS_AutoBalance_PlayerScript;
++    new VAS_AutoBalance_UnitScript;
++//    new VAS_AutoBalance_CreatureScript;
++    new VAS_AutoBalance_AllCreatureScript;
++    new VAS_AutoBalance_AllMapScript;
++    new VAS_AutoBalance_WorldMapScript;
++//    new VAS_AutoBalance_InstanceMapScript;
++//    new VAS_AutoBalance_BattlegroundMapScript;
++}
+\ No newline at end of file
+diff --git a/src/server/worldserver/worldserver.conf.dist b/src/server/worldserver/worldserver.conf.dist
+index cc4c4a5..be08e59 100755
+--- a/src/server/worldserver/worldserver.conf.dist
++++ b/src/server/worldserver/worldserver.conf.dist
+@@ -2888,3 +2888,105 @@ PlayerDump.DisallowOverwrite = 1
+ 
+ #
+ ###################################################################################################
++
++###################################################################################################
++# VAS AUTOBALANCE OPTIONS
++#
++#     VAS.AutoBalance.XPlayer
++#        Set Server to level of solo mode.
++#        Set to 0 to Disable VAS-SOLO Mod.
++#        Example: VAS.AutoBalance.XPlayer = 1 will set everything for a 1 player game.
++#        Default:     1
++
++VAS.AutoBalance.XPlayer = 1
++
++#
++#     VAS.AutoBalance.AutoInstance
++#        Set instances to Auto chance XPlayer depending on players in it.
++#        Default:     1 (1 = ON, 0 = OFF)
++
++VAS.AutoBalance.AutoInstance = 1
++
++#
++#     VAS.AutoBalance.Debug
++#        0 = None
++#        1 = Errors Only
++#        2 = Errors and Basic Information
++#        3 = All VAS Info
++#        Default:     1
++
++VAS.AutoBalance.Debug = 1
++
++#
++#     VAS.AutoBalance.DebugById
++#        Sets an NPC ID to just debug that NPC
++#        Default:     0
++
++VAS.AutoBalance.DebugById = 0
++
++#
++#     VAS.AutoBalance.PlayerChangeNotify
++#        Set Auto Notifications to all players in Instance that player count has changed.
++#        Default:     1 (1 = ON, 0 = OFF)
++
++VAS.AutoBalance.PlayerChangeNotify = 1
++
++#
++#     VAS.AutoBalance.Creature.Update.Timer
++#        Sets the Timer to update creatures in Instances when AutoInstance is on.
++#        Default:     30 (Minimum is 5 seconds)
++#        NOTE: Do NOT set too low!  Server performance will be impacted!
++
++VAS.AutoBalance.Creature.Update.Timer = 30
++
++#
++#     VAS.AutoBalance.Color
++#        In Game Color for mod information in chat window.
++#        Default:     cffFF8000 (Orange)
++
++VAS.AutoBalance.Color = cffFF8000
++
++#
++#     Min.HP.Mod
++#        Minimum Modifier setting for Health Modification
++#        Default:     0.20
++
++Min.HP.Mod = 0.20
++
++#
++#     Min.D.Mod
++#        Minimum Modifier setting for Damage Modification
++#        Default:     0.10
++
++Min.D.Mod = 0.10
++
++#
++#     VAS.Group.Modifier
++#        Modifier setting for Group Damage
++#        Default:     1.0
++#        NOTE: This is a final modification on damage before it's applied.
++
++VAS.Group.Modifier = 1.0
++
++#
++#     VAS.Damage.Modifier
++#        Modifier setting for NPC Damage
++#        Default:     1.0
++#        NOTE: This is a final modification on damage before it's applied.
++
++VAS.Damage.Modifier = 1.0
++
++#
++#     VAS.AutoBalance.XX.Name
++#        Sets MobIDs for the group they belong to.
++#        All 5 Man Mobs should go in VAS.AutoBalance.5.Name
++#        All 10 Man Mobs should go in VAS.AutoBalance.10.Name etc.
++
++VAS.AutoBalance.40.Name = "11583,16441,30057,13020,15589,14435,18192,14889,14888,14887,14890,15302,15818,15742,15741,15740,18338"
++VAS.AutoBalance.25.Name = "22997,21966,21965,21964,21806,21215,21845,19728,12397,17711,18256,18192,"
++VAS.AutoBalance.10.Name = "15689,15550,16152,17521,17225,16028,29324,31099"
++VAS.AutoBalance.5.Name = "15203,15204,15205,15305,6109,26801,30508,26799,30495,26803,30497,27859,27249"
++VAS.AutoBalance.2.Name = "25549,24558,25574,24559,25556,25557,25578,24561,25555,24555,25541,24553,25550,24554,24552,25564,15931,29373"
++
++#
++###################################################################################################
+\ No newline at end of file

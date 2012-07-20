@@ -1,0 +1,3 @@
+For those with a bit more courage and willingness to run untested code: below I've attached an updated version of VAS_Autobalance.cpp, first apply the original patch then download the file, make sure to rename it to drop the ".txt" off the filename, copy it to src/server/scripts/Custom make sure to replace the original file, and then Compile your TrinityCore. In this copy I've optimized the original code although there is still room to fix issues, removed much of the nonsensical code, and changed the HP scaling so it's no longer linear. There is still a lot of work do on it, so please let me know what you think and what needs to be adjusted.
+
+Edit 6: Added in an updated VAS_Autobalance.cpp renamed to VAS_Autobalance.cpp.txt to upload.
